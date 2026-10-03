@@ -1,0 +1,146 @@
+:root{
+  --bg:#0b0d12;
+  --surface:#12151c;
+  --surface-2:#1a1e27;
+  --text:#f4f5f7;
+  --muted:#9aa1ae;
+  --accent:#ff5a1f;
+  --accent-2:#ffb703;
+  --green:#22c55e;
+  --radius:16px;
+  --shadow:0 20px 60px rgba(0,0,0,.45);
+}
+
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  font-family:'Inter',system-ui,-apple-system,sans-serif;
+  background:var(--bg);color:var(--text);line-height:1.55;
+  min-height:100vh;
+}
+
+/* ---------- HERO ---------- */
+.hero{
+  position:relative;
+  min-height:92vh;
+  display:flex;align-items:center;justify-content:center;
+  padding:80px 24px;
+  overflow:hidden;
+}
+.hero-glow{
+  position:absolute;inset:-20%;
+  background:
+    radial-gradient(600px 400px at 20% 30%, rgba(255,90,31,.25), transparent 60%),
+    radial-gradient(600px 400px at 80% 70%, rgba(255,183,3,.18), transparent 60%);
+  filter:blur(40px);
+  animation:float 12s ease-in-out infinite;
+  z-index:0;
+}
+@keyframes float{
+  0%,100%{transform:translate(0,0)}
+  50%{transform:translate(30px,-30px)}
+}
+.hero-inner{position:relative;z-index:1;max-width:960px;text-align:center}
+
+.badge{
+  display:inline-block;padding:8px 16px;border-radius:999px;
+  background:rgba(255,255,255,.06);
+  border:1px solid rgba(255,255,255,.1);
+  font-size:.85rem;color:var(--muted);
+  animation:fadeUp .6s ease both;
+}
+
+.hero-title{
+  font-size:clamp(2.4rem,6vw,4.8rem);
+  font-weight:800;letter-spacing:-.03em;line-height:1.05;
+  margin:24px 0;
+}
+.hero-title .line{display:block}
+.hero-title .line:nth-child(1){animation:fadeUp .7s .1s ease both}
+.hero-title .line:nth-child(2){animation:fadeUp .7s .25s ease both}
+.gradient{
+  background:linear-gradient(90deg,var(--accent),var(--accent-2));
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+}
+
+.hero-sub{
+  max-width:620px;margin:0 auto 40px;color:var(--muted);
+  font-size:1.1rem;animation:fadeUp .7s .4s ease both;
+}
+
+/* ---------- CTA CARDS ---------- */
+.cta-grid{
+  display:grid;grid-template-columns:1fr 1fr;gap:20px;
+  max-width:780px;margin:0 auto;
+}
+.cta{
+  display:flex;align-items:center;gap:16px;
+  padding:24px;border-radius:var(--radius);
+  background:var(--surface);
+  border:1px solid rgba(255,255,255,.08);
+  color:var(--text);text-decoration:none;
+  text-align:left;position:relative;overflow:hidden;
+  transition:transform .25s cubic-bezier(.2,.9,.3,1.2), border-color .25s, box-shadow .25s;
+}
+.cta:hover{
+  transform:translateY(-6px);
+  border-color:rgba(255,255,255,.2);
+  box-shadow:var(--shadow);
+}
+.cta-seller:hover{border-color:var(--accent)}
+.cta-buyer:hover{border-color:var(--green)}
+
+.cta-icon{
+  font-size:2rem;width:60px;height:60px;flex:0 0 60px;
+  display:grid;place-items:center;border-radius:14px;
+  background:var(--surface-2);
+}
+.cta h3{font-size:1.2rem;margin-bottom:2px}
+.cta p{color:var(--muted);font-size:.9rem}
+.cta .arrow{
+  margin-left:auto;font-size:1.5rem;
+  transition:transform .3s;
+}
+.cta:hover .arrow{transform:translateX(6px)}
+
+/* ---------- TRUST ROW ---------- */
+.trust-row{
+  display:flex;justify-content:center;gap:48px;
+  margin-top:60px;animation:fadeUp .8s .6s ease both;
+}
+.trust-row div{display:flex;flex-direction:column;align-items:center}
+.trust-row strong{font-size:1.5rem;color:var(--text)}
+.trust-row span{font-size:.85rem;color:var(--muted)}
+
+/* ---------- HOW IT WORKS ---------- */
+.how{max-width:1000px;margin:80px auto;padding:0 24px}
+.how h2{
+  font-size:2rem;text-align:center;margin-bottom:40px;
+  letter-spacing:-.02em;
+}
+.how-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+.how-card{
+  background:var(--surface);padding:28px;border-radius:var(--radius);
+  border:1px solid rgba(255,255,255,.06);
+}
+.how-card .num{
+  width:36px;height:36px;border-radius:50%;
+  background:linear-gradient(135deg,var(--accent),var(--accent-2));
+  color:#000;font-weight:800;
+  display:grid;place-items:center;margin-bottom:16px;
+}
+.how-card h4{font-size:1.15rem;margin-bottom:6px}
+.how-card p{color:var(--muted);font-size:.95rem}
+
+@keyframes fadeUp{
+  from{opacity:0;transform:translateY(20px)}
+  to{opacity:1;transform:translateY(0)}
+}
+
+/* ---------- RESPONSIVE ---------- */
+@media(max-width:720px){
+  .cta-grid{grid-template-columns:1fr}
+  .how-grid{grid-template-columns:1fr}
+  .trust-row{gap:24px}
+  .trust-row strong{font-size:1.2rem}
+  .hero{min-height:auto;padding:60px 20px}
+}
