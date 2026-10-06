@@ -3,12 +3,10 @@ require __DIR__ . '/db.php';
 
 $id = (int)($_GET['id'] ?? 0);
 $stmt = db()->prepare("
-    SELECT p.*,
-           c.name AS cat_name,
-           u.id   AS seller_id,
-           u.full_name AS owner_name,
+    SELECT p.*, c.name AS cat_name,
+           u.id AS seller_id, u.full_name AS owner_name,
            COALESCE(NULLIF(sp.business_name,''), u.full_name) AS seller_name,
-           sp.tin, sp.phone AS business_phone, sp.address AS business_address
+           sp.phone AS business_phone, sp.address AS business_address
     FROM products p
     LEFT JOIN categories c      ON c.id = p.category_id
     JOIN users u                ON u.id = p.seller_id
@@ -20,10 +18,11 @@ $p = $stmt->fetch();
 
 if (!$p) { http_response_code(404); die('Item not found'); }
 
-// Increment view
 db()->prepare("UPDATE products SET views = views + 1 WHERE id = ?")->execute([$id]);
 db()->prepare("INSERT INTO product_views (product_id, viewer_id) VALUES (?, ?)")
     ->execute([$id, current_user()['id'] ?? null]);
+
+$hasDiscount = (float)$p['discount_percent'] > 0 && $p['original_price'];
 
 $__pageTitle = $p['title'];
 require __DIR__ . '/layout/header.php';
@@ -39,6 +38,9 @@ require __DIR__ . '/layout/header.php';
         <?php if (!$p['cover_image']): ?>
           <span class="thumb-placeholder big">📦</span>
         <?php endif; ?>
+        <?php if ($hasDiscount): ?>
+          <span class="product-badge">−<?= number_format((float)$p['discount_percent'], 0) ?>%</span>
+        <?php endif; ?>
       </div>
     </div>
 
@@ -46,7 +48,15 @@ require __DIR__ . '/layout/header.php';
       <span class="product-cat"><?= e($p['cat_name'] ?? 'Uncategorised') ?></span>
       <h1><?= e($p['title']) ?></h1>
 
-      <div class="product-detail-price">$<?= number_format((float)$p['price'], 2) ?></div>
+      <div class="product-detail-price">
+        UGX <?= number_format((float)$p['price'], 0) ?>
+        <?php if ($hasDiscount): ?>
+          <s class="price-was">UGX <?= number_format((float)$p['original_price'], 0) ?></s>
+          <span class="discount-tag">
+            −<?= number_format((float)$p['discount_percent'], 0) ?>% off
+          </span>
+        <?php endif; ?>
+      </div>
 
       <div class="product-detail-meta">
         <span>📍 <?= e($p['location'] ?: '—') ?></span>
@@ -57,17 +67,17 @@ require __DIR__ . '/layout/header.php';
       <p class="product-detail-desc"><?= nl2br(e($p['description'] ?: 'No description provided.')) ?></p>
 
       <div class="product-detail-seller">
-  <div class="seller-avatar"><?= strtoupper(substr($p['seller_name'], 0, 1)) ?></div>
-  <div>
-    <strong><?= e($p['seller_name']) ?></strong>
-    <small>
-      Seller
-      <?php if (!empty($p['business_address'])): ?>
-        · <?= e($p['business_address']) ?>
-      <?php endif; ?>
-    </small>
-  </div>
-</div>
+        <div class="seller-avatar"><?= strtoupper(substr($p['seller_name'], 0, 1)) ?></div>
+        <div>
+          <strong><?= e($p['seller_name']) ?></strong>
+          <small>
+            Seller
+            <?php if (!empty($p['business_address'])): ?>
+              · <?= e($p['business_address']) ?>
+            <?php endif; ?>
+          </small>
+        </div>
+      </div>
 
       <div class="product-detail-actions">
         <button class="btn btn-primary btn-lg" data-add-to-cart="<?= (int)$p['id'] ?>">

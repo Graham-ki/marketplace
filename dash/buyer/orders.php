@@ -3,21 +3,16 @@ require_once __DIR__ . '/../_helpers.php';
 
 $u = current_user();
 
-// ═══════════════════════════════════════════════════
-// STATUS FILTER
-// ═══════════════════════════════════════════════════
+/* ─── Filters + pagination ─── */
 $filter = $_GET['status'] ?? '';
 if (!in_array($filter, ['', 'pending','confirmed','shipped','delivered','cancelled'], true)) {
     $filter = '';
 }
 
-// ═══════════════════════════════════════════════════
-// PAGINATION SETUP
-// ═══════════════════════════════════════════════════
 $page    = max(1, (int)($_GET['page'] ?? 1));
 $perPage = 10;
 
-// ─── KPIs (whole set, not filtered) ───
+/* ─── KPIs ─── */
 $kpiStmt = db()->prepare("
     SELECT
         COUNT(*)                                                                      AS total_orders,
@@ -36,20 +31,19 @@ $kpiStmt = db()->prepare("
 $kpiStmt->execute([$u['id']]);
 $kpi = $kpiStmt->fetch();
 
-$totalOrders      = (int)$kpi['total_orders'];
-$pendingCount     = (int)$kpi['pending_count'];
-$confirmedCount   = (int)$kpi['confirmed_count'];
-$shippedCount     = (int)$kpi['shipped_count'];
-$deliveredCount   = (int)$kpi['delivered_count'];
-$cancelledCount   = (int)$kpi['cancelled_count'];
-$spent            = (float)$kpi['spent'];
-$spentThisMonth   = (float)$kpi['spent_this_month'];
+$totalOrders    = (int)$kpi['total_orders'];
+$pendingCount   = (int)$kpi['pending_count'];
+$confirmedCount = (int)$kpi['confirmed_count'];
+$shippedCount   = (int)$kpi['shipped_count'];
+$deliveredCount = (int)$kpi['delivered_count'];
+$cancelledCount = (int)$kpi['cancelled_count'];
+$spent          = (float)$kpi['spent'];
+$spentThisMonth = (float)$kpi['spent_this_month'];
 
-// ─── Count for current filter (pagination math) ───
+/* ─── Count for pagination ─── */
 $countSql  = "SELECT COUNT(*) FROM orders WHERE buyer_id = ?";
 $countArgs = [$u['id']];
 if ($filter) { $countSql .= " AND status = ?"; $countArgs[] = $filter; }
-
 $countStmt = db()->prepare($countSql);
 $countStmt->execute($countArgs);
 $filteredTotal = (int)$countStmt->fetchColumn();
@@ -58,16 +52,18 @@ $totalPages = max(1, (int)ceil($filteredTotal / $perPage));
 if ($page > $totalPages) $page = $totalPages;
 $offset = ($page - 1) * $perPage;
 
-// ─── Fetch current page ───
+/* ─── Fetch page (includes payment_status via LEFT JOIN) ─── */
 $sql = "
-    SELECT o.*, p.title AS product_title, p.cover_image,
+    SELECT o.*,
+           p.title AS product_title, p.cover_image,
            s.full_name AS seller_name,
            COALESCE(NULLIF(sp.business_name,''), s.full_name) AS seller_shop,
-           o.created_at
+           pay.status AS payment_status
     FROM orders o
     JOIN products p ON p.id = o.product_id
     JOIN users s   ON s.id = o.seller_id
     LEFT JOIN seller_profiles sp ON sp.user_id = s.id
+    LEFT JOIN payments pay ON pay.order_id = o.id
     WHERE o.buyer_id = ?
 ";
 $args = [$u['id']];
@@ -78,7 +74,6 @@ $stmt = db()->prepare($sql);
 $stmt->execute($args);
 $orders = $stmt->fetchAll();
 
-// ─── URL helper: preserve filter across pages ───
 function buyer_orders_url(array $overrides = []): string {
     $base = [
         'tab'    => 'orders',
@@ -89,16 +84,23 @@ function buyer_orders_url(array $overrides = []): string {
     return 'dashboard.php?' . http_build_query($params);
 }
 
+$actions = '
+  <div class="btn-group">
+    <button type="button" class="btn btn-ghost" id="downloadSelected" disabled>
+      ⬇ Download selected
+    </button>
+  </div>
+';
+
 dash_header(
     'My orders',
     $totalOrders . ' order' . ($totalOrders === 1 ? '' : 's') . ' · '
-        . money($spent) . ' spent lifetime'
+        . money($spent) . ' spent lifetime',
+    $actions
 );
 ?>
 
-<!-- ═══════════════════════════════════════════════════
-     KPI CARDS
-     ═══════════════════════════════════════════════════ -->
+<!-- KPIs -->
 <div class="kpi-grid">
   <div class="kpi-card gradient decorated">
     <div class="kpi-icon">💰</div>
@@ -111,18 +113,14 @@ dash_header(
     <div class="kpi-icon">⏳</div>
     <span class="kpi-label">Pending</span>
     <span class="kpi-value"><?= $pendingCount ?></span>
-    <span class="kpi-delta">
-      <?= $pendingCount > 0 ? 'Awaiting confirmation' : 'All clear' ?>
-    </span>
+    <span class="kpi-delta"><?= $pendingCount > 0 ? 'Awaiting confirmation' : 'All clear' ?></span>
   </div>
 
   <div class="kpi-card info">
     <div class="kpi-icon">📦</div>
     <span class="kpi-label">In transit</span>
     <span class="kpi-value"><?= $confirmedCount + $shippedCount ?></span>
-    <span class="kpi-delta">
-      <?= $confirmedCount ?> confirmed · <?= $shippedCount ?> shipped
-    </span>
+    <span class="kpi-delta"><?= $confirmedCount ?> confirmed · <?= $shippedCount ?> shipped</span>
   </div>
 
   <div class="kpi-card success">
@@ -133,34 +131,23 @@ dash_header(
   </div>
 </div>
 
-
-<!-- ═══════════ STATUS FILTER CHIPS ═══════════ -->
+<!-- Filter chips -->
 <div class="filter-row">
   <?php foreach ([''=>'All','pending'=>'Pending','confirmed'=>'Confirmed','shipped'=>'Shipped','delivered'=>'Delivered','cancelled'=>'Cancelled'] as $k=>$lbl): ?>
     <a href="<?= e(buyer_orders_url(['status' => $k, 'page' => ''])) ?>"
-       class="chip <?= $filter === $k ? 'active' : '' ?>">
-      <?= $lbl ?>
-    </a>
+       class="chip <?= $filter === $k ? 'active' : '' ?>"><?= $lbl ?></a>
   <?php endforeach; ?>
 </div>
 
-
 <?php if (!$orders): ?>
-
   <div class="empty-state">
     <div class="empty-icon">🛍️</div>
     <h3>No orders here</h3>
-    <p>
-      <?= $filter
-          ? 'No ' . e($filter) . ' orders yet.'
-          : "You haven't placed any orders yet." ?>
-    </p>
+    <p><?= $filter ? 'No ' . e($filter) . ' orders yet.' : "You haven't placed any orders yet." ?></p>
     <a href="index.php" class="btn btn-accent">Browse items →</a>
   </div>
-
 <?php else: ?>
 
-  <!-- ═══ SEARCH + COUNT ═══ -->
   <div class="list-toolbar">
     <div class="search-mini">
       <span class="search-mini-icon">🔍</span>
@@ -173,11 +160,13 @@ dash_header(
     </span>
   </div>
 
-  <!-- ═══ TABLE ═══ -->
   <div class="table-scroll">
     <table class="data-table data-table-wide" id="buyerOrdersTable">
       <thead>
         <tr>
+          <th style="width:36px">
+            <input type="checkbox" id="selectAll" aria-label="Select all">
+          </th>
           <th>Order</th>
           <th>Item</th>
           <th>Seller</th>
@@ -191,21 +180,25 @@ dash_header(
         </tr>
       </thead>
       <tbody>
-      <?php foreach ($orders as $o): ?>
-        <?php
-          $canCancel = in_array($o['status'], ['pending','confirmed'], true);
-          $canRefund = in_array($o['status'], ['pending','confirmed','shipped'], true);
-          $canDelete = $o['status'] === 'cancelled';
-        ?>
+      <?php foreach ($orders as $o):
+        $canCancel = in_array($o['status'], ['pending','confirmed'], true);
+        $canRefund = in_array($o['status'], ['pending','confirmed','shipped'], true);
+        $canDelete = $o['status'] === 'cancelled';
+        $isPaid    = $o['payment_status'] === 'completed';
+      ?>
         <tr data-order-row="<?= (int)$o['id'] ?>">
+          <td>
+            <input type="checkbox"
+                   class="row-select"
+                   data-order-id="<?= (int)$o['id'] ?>"
+                   data-order-group="<?= e($o['order_group'] ?? '') ?>"
+                   aria-label="Select order <?= e($o['order_code']) ?>">
+          </td>
           <td><code><?= e($o['order_code']) ?></code></td>
           <td>
             <div class="cell-product">
               <div class="cell-thumb" style="background-image:url('<?= e($o['cover_image'] ?: '') ?>')"></div>
-              <div>
-                <strong><?= e($o['product_title']) ?></strong>
-                <small>× <?= (int)$o['quantity'] ?></small>
-              </div>
+              <div><strong><?= e($o['product_title']) ?></strong><small>× <?= (int)$o['quantity'] ?></small></div>
             </div>
           </td>
           <td><?= e($o['seller_shop']) ?></td>
@@ -213,19 +206,23 @@ dash_header(
           <td class="num">
             <?php if ((float)$o['discount_amount'] > 0): ?>
               <span class="text-discount">− <?= number_format((float)$o['discount_amount'], 2) ?></span>
-              <small>(<?= number_format((float)$o['discount_percent'], 2) ?>%)</small>
             <?php else: ?>—<?php endif; ?>
           </td>
           <td class="num">
             <?php if ((float)$o['tax_amount'] > 0): ?>
               <span class="text-tax">+ <?= number_format((float)$o['tax_amount'], 2) ?></span>
-              <small>(<?= number_format((float)$o['tax_percent'], 2) ?>%)</small>
             <?php else: ?>—<?php endif; ?>
           </td>
           <td class="num"><strong>UGX <?= number_format((float)$o['total_amount'], 2) ?></strong></td>
           <td><?= status_pill($o['status']) ?></td>
           <td><small><?= e(date('M j, Y', strtotime($o['created_at']))) ?></small></td>
           <td class="row-actions">
+            <a href="receipt.php?id=<?= (int)$o['id'] ?>" target="_blank"
+               class="btn-link"
+               title="<?= $isPaid ? 'Download receipt' : 'Download invoice' ?>">
+              📄 <?= $isPaid ? 'Receipt' : 'Invoice' ?>
+            </a>
+
             <?php if ($canCancel): ?>
               <button class="btn-link danger"
                       data-cancel-order="<?= (int)$o['id'] ?>"
@@ -256,71 +253,46 @@ dash_header(
     <p>No orders match your search on this page.</p>
   </div>
 
-  <!-- ═══ PAGINATION ═══ -->
   <?php if ($totalPages > 1): ?>
     <nav class="pagination" aria-label="Pagination">
-
       <?php if ($page > 1): ?>
         <a href="<?= e(buyer_orders_url(['page' => $page - 1])) ?>" class="page-btn">‹ Prev</a>
       <?php else: ?>
         <span class="page-btn disabled">‹ Prev</span>
       <?php endif; ?>
 
-      <?php
-        $window = 2;
-        $start  = max(1, $page - $window);
-        $end    = min($totalPages, $page + $window);
-
-        if ($start > 1) {
-            echo '<a href="' . e(buyer_orders_url(['page' => 1])) . '" class="page-btn">1</a>';
-            if ($start > 2) echo '<span class="page-dots">…</span>';
-        }
-
-        for ($i = $start; $i <= $end; $i++):
-      ?>
+      <?php for ($i = max(1, $page - 2); $i <= min($totalPages, $page + 2); $i++): ?>
         <a href="<?= e(buyer_orders_url(['page' => $i])) ?>"
            class="page-btn <?= $i === $page ? 'active' : '' ?>"><?= $i ?></a>
-      <?php
-        endfor;
-
-        if ($end < $totalPages) {
-            if ($end < $totalPages - 1) echo '<span class="page-dots">…</span>';
-            echo '<a href="' . e(buyer_orders_url(['page' => $totalPages])) . '" class="page-btn">' . $totalPages . '</a>';
-        }
-      ?>
+      <?php endfor; ?>
 
       <?php if ($page < $totalPages): ?>
         <a href="<?= e(buyer_orders_url(['page' => $page + 1])) ?>" class="page-btn">Next ›</a>
       <?php else: ?>
         <span class="page-btn disabled">Next ›</span>
       <?php endif; ?>
-
     </nav>
   <?php endif; ?>
 
 <?php endif; ?>
 
 
-<!-- ═══════════ CANCEL ORDER MODAL ═══════════ -->
+<!-- ═══ CANCEL ORDER MODAL ═══ -->
 <div class="modal" id="cancelOrderModal" hidden>
   <div class="modal-backdrop" data-close-modal></div>
   <div class="modal-panel modal-panel-sm">
     <button class="modal-close" data-close-modal>×</button>
-
     <div class="confirm-hero">
       <div class="confirm-icon">❌</div>
       <h2>Cancel this order?</h2>
       <p class="step-sub" id="cancel-order-sub">The seller will be notified.</p>
-
       <div class="confirm-warning">
         Cancelling stops the order from being fulfilled. It remains in your
         history and the seller can still issue a refund if a payment was made.
       </div>
-
       <form id="cancelOrderForm" class="settings-form" style="margin-top:20px">
         <?= csrf_field() ?>
         <input type="hidden" name="order_id" id="cancel-order-id">
-
         <div class="modal-actions">
           <button type="button" class="btn btn-ghost" data-close-modal>Keep order</button>
           <button type="submit" class="btn btn-danger">Cancel order</button>
@@ -330,27 +302,22 @@ dash_header(
   </div>
 </div>
 
-
-<!-- ═══════════ DELETE ORDER MODAL ═══════════ -->
+<!-- ═══ DELETE ORDER MODAL ═══ -->
 <div class="modal" id="deleteOrderModal" hidden>
   <div class="modal-backdrop" data-close-modal></div>
   <div class="modal-panel modal-panel-sm">
     <button class="modal-close" data-close-modal>×</button>
-
     <div class="confirm-hero">
       <div class="confirm-icon">🗑️</div>
       <h2>Delete this order?</h2>
       <p class="step-sub" id="delete-order-sub">This cannot be undone.</p>
-
       <div class="confirm-warning">
         The order will be permanently removed from your history. Use this only
         for cancelled orders you no longer want to see.
       </div>
-
       <form id="deleteOrderForm" class="settings-form" style="margin-top:20px">
         <?= csrf_field() ?>
         <input type="hidden" name="order_id" id="delete-order-id">
-
         <div class="modal-actions">
           <button type="button" class="btn btn-ghost" data-close-modal>Keep</button>
           <button type="submit" class="btn btn-danger">Delete order</button>
@@ -363,9 +330,7 @@ dash_header(
 
 <script>
 (() => {
-  /* ═══════════════════════════════════════════════
-     LIVE SEARCH
-     ═══════════════════════════════════════════════ */
+  /* ═══ Live search within page ═══ */
   const searchEl = document.getElementById('buyerOrderSearch');
   const tableEl  = document.getElementById('buyerOrdersTable');
   const countEl  = document.getElementById('buyerOrderCount');
@@ -379,13 +344,11 @@ dash_header(
     searchEl.addEventListener('input', () => {
       const q = searchEl.value.trim().toLowerCase();
       let shown = 0;
-
       rows.forEach(r => {
         const hit = !q || r.textContent.toLowerCase().includes(q);
         r.hidden = !hit;
         if (hit) shown++;
       });
-
       if (countEl) {
         countEl.textContent = q
           ? `${shown} of ${onPageTotal} on this page (${filteredTotal} total)`
@@ -395,9 +358,7 @@ dash_header(
     });
   }
 
-  /* ═══════════════════════════════════════════════
-     MODAL OPEN/CLOSE HELPERS
-     ═══════════════════════════════════════════════ */
+  /* ═══ Modal helpers ═══ */
   document.querySelectorAll('[data-close-modal]').forEach(el => {
     el.addEventListener('click', () => {
       const m = el.closest('.modal');
@@ -409,16 +370,12 @@ dash_header(
       document.querySelectorAll('.modal:not([hidden])').forEach(m => m.hidden = true);
   });
 
-  /* ═══════════════════════════════════════════════
-     CANCEL ORDER
-     ═══════════════════════════════════════════════ */
+  /* ═══ Cancel order ═══ */
   document.querySelectorAll('[data-cancel-order]').forEach(btn => {
     btn.addEventListener('click', () => {
-      const id   = btn.dataset.cancelOrder;
-      const code = btn.dataset.cancelCode;
-      document.getElementById('cancel-order-id').value = id;
+      document.getElementById('cancel-order-id').value = btn.dataset.cancelOrder;
       document.getElementById('cancel-order-sub').textContent =
-        `Order ${code} will be marked as cancelled.`;
+        `Order ${btn.dataset.cancelCode} will be marked as cancelled.`;
       document.getElementById('cancelOrderModal').hidden = false;
     });
   });
@@ -427,35 +384,26 @@ dash_header(
     e.preventDefault();
     const btn  = e.target.querySelector('button[type=submit]');
     const orig = btn.textContent;
-    btn.disabled = true;
-    btn.textContent = 'Cancelling…';
-
+    btn.disabled = true; btn.textContent = 'Cancelling…';
     try {
       const fd = new FormData(e.target);
       fd.append('action', 'cancel');
       const r = await fetch('buyer_order_action.php', { method:'POST', body: fd });
       const j = await r.json();
       if (j.ok) location.reload();
-      else {
-        alert(j.error || 'Failed to cancel order');
-        btn.disabled = false; btn.textContent = orig;
-      }
-    } catch (_) {
+      else { alert(j.error || 'Failed'); btn.disabled = false; btn.textContent = orig; }
+    } catch {
       alert('Network error');
       btn.disabled = false; btn.textContent = orig;
     }
   });
 
-  /* ═══════════════════════════════════════════════
-     DELETE ORDER
-     ═══════════════════════════════════════════════ */
+  /* ═══ Delete order ═══ */
   document.querySelectorAll('[data-delete-order]').forEach(btn => {
     btn.addEventListener('click', () => {
-      const id   = btn.dataset.deleteOrder;
-      const code = btn.dataset.deleteCode;
-      document.getElementById('delete-order-id').value = id;
+      document.getElementById('delete-order-id').value = btn.dataset.deleteOrder;
       document.getElementById('delete-order-sub').textContent =
-        `Order ${code} will be permanently removed.`;
+        `Order ${btn.dataset.deleteCode} will be permanently removed.`;
       document.getElementById('deleteOrderModal').hidden = false;
     });
   });
@@ -464,30 +412,60 @@ dash_header(
     e.preventDefault();
     const btn  = e.target.querySelector('button[type=submit]');
     const orig = btn.textContent;
-    btn.disabled = true;
-    btn.textContent = 'Deleting…';
-
+    btn.disabled = true; btn.textContent = 'Deleting…';
     try {
       const fd = new FormData(e.target);
       fd.append('action', 'delete');
       const r = await fetch('buyer_order_action.php', { method:'POST', body: fd });
       const j = await r.json();
       if (j.ok) {
-        const row = document.querySelector(`tr[data-order-row="${document.getElementById('delete-order-id').value}"]`);
-        row?.remove();
+        document.querySelector(`tr[data-order-row="${document.getElementById('delete-order-id').value}"]`)?.remove();
         document.getElementById('deleteOrderModal').hidden = true;
-
-        // If we removed the last visible row, reload to refresh KPIs and pagination
         const remaining = document.querySelectorAll('#buyerOrdersTable tbody tr:not([hidden])').length;
         if (remaining === 0) location.reload();
       } else {
-        alert(j.error || 'Failed to delete order');
-        btn.disabled = false; btn.textContent = orig;
+        alert(j.error || 'Failed'); btn.disabled = false; btn.textContent = orig;
       }
-    } catch (_) {
+    } catch {
       alert('Network error');
       btn.disabled = false; btn.textContent = orig;
     }
+  });
+
+  /* ═══ Bulk download ═══ */
+  const selectAll   = document.getElementById('selectAll');
+  const downloadBtn = document.getElementById('downloadSelected');
+  const checkboxes  = [...document.querySelectorAll('.row-select')];
+
+  function updateDownloadButton() {
+    const checked = checkboxes.filter(r => r.checked);
+    downloadBtn.disabled = checked.length === 0;
+    downloadBtn.textContent = checked.length === 0
+      ? '⬇ Download Statements'
+      : `⬇ Download ${checked.length} document${checked.length === 1 ? '' : 's'}`;
+  }
+
+  selectAll?.addEventListener('change', () => {
+    checkboxes.forEach(r => r.checked = selectAll.checked);
+    updateDownloadButton();
+  });
+  checkboxes.forEach(r => r.addEventListener('change', updateDownloadButton));
+  updateDownloadButton();
+
+  downloadBtn?.addEventListener('click', () => {
+    const checked = checkboxes.filter(r => r.checked);
+    if (!checked.length) return;
+
+    // If every checked row shares the same order_group → combined doc for that checkout.
+    // Otherwise → statement by ids.
+    const groups = [...new Set(checked.map(r => r.dataset.orderGroup).filter(Boolean))];
+    const sameGroup = groups.length === 1 && checked.every(r => r.dataset.orderGroup === groups[0]);
+
+    const url = sameGroup
+      ? `receipt_bulk.php?group=${encodeURIComponent(groups[0])}`
+      : `receipt_bulk.php?ids=${checked.map(r => r.dataset.orderId).join(',')}`;
+
+    window.open(url, '_blank');
   });
 })();
 </script>

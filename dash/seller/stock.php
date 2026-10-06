@@ -3,13 +3,12 @@ require_once __DIR__ . '/../_helpers.php';
 
 $u = current_user();
 
-// ═══════════════════════════════════════════════════
-// PAGINATION SETUP
-// ═══════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════
+   PAGINATION + KPIs
+   ═══════════════════════════════════════════════════ */
 $page    = max(1, (int)($_GET['page'] ?? 1));
 $perPage = 10;
 
-// ─── KPIs (computed from the whole set, not just this page) ───
 $kpiStmt = db()->prepare("
     SELECT
         COUNT(*)                                                       AS total_items,
@@ -17,7 +16,8 @@ $kpiStmt = db()->prepare("
         COALESCE(SUM(price * quantity), 0)                             AS inventory_value,
         COALESCE(SUM(CASE WHEN quantity <= 3 THEN 1 ELSE 0 END), 0)    AS low_stock,
         COALESCE(SUM(CASE WHEN quantity = 0 THEN 1 ELSE 0 END), 0)     AS out_of_stock,
-        COALESCE(SUM(views), 0)                                        AS total_views
+        COALESCE(SUM(views), 0)                                        AS total_views,
+        COALESCE(SUM(CASE WHEN discount_percent > 0 THEN 1 ELSE 0 END), 0) AS on_discount
     FROM products
     WHERE seller_id = ?
 ");
@@ -30,13 +30,12 @@ $inventoryValue = (float)$kpi['inventory_value'];
 $lowStock       = (int)$kpi['low_stock'];
 $outOfStock     = (int)$kpi['out_of_stock'];
 $totalViews     = (int)$kpi['total_views'];
+$onDiscount     = (int)$kpi['on_discount'];
 
-// ─── Pagination math ───
 $totalPages = max(1, (int)ceil($totalItems / $perPage));
 if ($page > $totalPages) $page = $totalPages;
 $offset = ($page - 1) * $perPage;
 
-// ─── Fetch current page ───
 $stmt = db()->prepare("
     SELECT p.*, c.name AS cat_name
     FROM products p
@@ -48,10 +47,8 @@ $stmt = db()->prepare("
 $stmt->execute([$u['id']]);
 $items = $stmt->fetchAll();
 
-// ─── Categories for modals ───
 $cats = db()->query("SELECT id,name,icon FROM categories ORDER BY name")->fetchAll();
 
-// ─── URL helper: preserves page (and any future filters) ───
 function stock_url(array $overrides = []): string {
     $base = ['page' => $_GET['page'] ?? ''];
     $params = array_filter(array_merge($base, $overrides), fn($v) => $v !== '' && $v !== null);
@@ -67,54 +64,39 @@ dash_header(
 );
 ?>
 
-<!-- ═══════════════════════════════════════════════════
-     KPI CARDS
-     ═══════════════════════════════════════════════════ -->
+<!-- KPI CARDS -->
 <div class="kpi-grid">
-  <div class="kpi-card gradient decorated">
+  <div class="kpi-card">
     <span class="kpi-label">Items listed</span>
     <span class="kpi-value"><?= $totalItems ?></span>
-    <span class="kpi-delta">
-      <?= $totalViews ?> total view<?= $totalViews === 1 ? '' : 's' ?>
-    </span>
+    <span class="kpi-delta"><?= $totalViews ?> total views</span>
   </div>
-
-  <div class="kpi-card warn decorated">
+  <div class="kpi-card">
     <span class="kpi-label">Inventory value</span>
     <span class="kpi-value"><?= money($inventoryValue) ?></span>
     <span class="kpi-delta"><?= $totalUnits ?> units in stock</span>
   </div>
-
-  <div class="kpi-card info decorated">
-    <span class="kpi-label">Low stock</span>
-    <span class="kpi-value <?= $lowStock > 0 ? 'warn' : '' ?>"><?= $lowStock ?></span>
-    <span class="kpi-delta">
-      <?= $lowStock > 0 ? 'Restock soon' : 'All healthy' ?>
-    </span>
+  <div class="kpi-card <?= $onDiscount > 0 ? 'accent' : 'neutral' ?>">
+    <span class="kpi-label">On discount</span>
+    <span class="kpi-value"><?= $onDiscount ?></span>
+    <span class="kpi-delta"><?= $onDiscount > 0 ? 'Promoted items' : 'None running' ?></span>
   </div>
-
-  <div class="kpi-card danger decorated">
-    <span class="kpi-label">Out of stock</span>
-    <span class="kpi-value <?= $outOfStock > 0 ? 'danger' : '' ?>"><?= $outOfStock ?></span>
-    <span class="kpi-delta">
-      <?= $outOfStock > 0 ? 'Needs attention' : 'None' ?>
-    </span>
+  <div class="kpi-card <?= $lowStock > 0 ? 'warn' : 'neutral' ?>">
+    <span class="kpi-label">Low stock</span>
+    <span class="kpi-value"><?= $lowStock ?></span>
+    <span class="kpi-delta"><?= $lowStock > 0 ? 'Restock soon' : 'All healthy' ?></span>
   </div>
 </div>
 
-
 <?php if (!$items): ?>
-
   <div class="empty-state">
     <div class="empty-icon">📦</div>
     <h3>No items yet</h3>
     <p>Add your first item to start selling.</p>
     <button class="btn btn-accent" data-open-modal="addItemModal">+ Add item</button>
   </div>
-
 <?php else: ?>
 
-  <!-- ═══ SEARCH + COUNT ═══ -->
   <div class="list-toolbar">
     <div class="search-mini">
       <span class="search-mini-icon">🔍</span>
@@ -127,7 +109,6 @@ dash_header(
     </span>
   </div>
 
-  <!-- ═══ TABLE ═══ -->
   <div class="table-scroll">
     <table class="data-table data-table-wide" id="stockTable">
       <thead>
@@ -143,6 +124,7 @@ dash_header(
       </thead>
       <tbody>
       <?php foreach ($items as $it): ?>
+        <?php $hasDiscount = (float)$it['discount_percent'] > 0; ?>
         <tr data-product-row="<?= (int)$it['id'] ?>">
           <td>
             <div class="cell-product">
@@ -155,7 +137,13 @@ dash_header(
           </td>
           <td><?= e($it['cat_name'] ?? '—') ?></td>
           <td class="num">
-            <span class="cell-price" data-field="price"><?= money((float)$it['price']) ?></span>
+            <div class="cell-price-block">
+              <span class="cell-price"><?= money((float)$it['price']) ?></span>
+              <?php if ($hasDiscount): ?>
+                <small class="price-was"><?= money((float)$it['original_price']) ?></small>
+                <small class="discount-tag">−<?= number_format((float)$it['discount_percent'], 0) ?>%</small>
+              <?php endif; ?>
+            </div>
           </td>
           <td class="num">
             <span class="cell-qty <?= $it['quantity'] <= 3 ? 'low' : '' ?>" data-field="quantity">
@@ -171,6 +159,8 @@ dash_header(
                         'id' => (int)$it['id'],
                         'title' => $it['title'],
                         'price' => (float)$it['price'],
+                        'discount_percent' => (float)$it['discount_percent'],
+                        'original_price' => $it['original_price'] !== null ? (float)$it['original_price'] : null,
                         'quantity' => (int)$it['quantity'],
                         'category_id' => (int)$it['category_id'],
                         'description' => $it['description'],
@@ -197,45 +187,24 @@ dash_header(
     <p>No items match your search.</p>
   </div>
 
-  <!-- ═══ PAGINATION ═══ -->
   <?php if ($totalPages > 1): ?>
     <nav class="pagination" aria-label="Pagination">
-
       <?php if ($page > 1): ?>
         <a href="<?= e(stock_url(['page' => $page - 1])) ?>" class="page-btn">‹ Prev</a>
       <?php else: ?>
         <span class="page-btn disabled">‹ Prev</span>
       <?php endif; ?>
 
-      <?php
-        $window = 2;
-        $start  = max(1, $page - $window);
-        $end    = min($totalPages, $page + $window);
-
-        if ($start > 1) {
-            echo '<a href="' . e(stock_url(['page' => 1])) . '" class="page-btn">1</a>';
-            if ($start > 2) echo '<span class="page-dots">…</span>';
-        }
-
-        for ($i = $start; $i <= $end; $i++):
-      ?>
+      <?php for ($i = max(1, $page - 2); $i <= min($totalPages, $page + 2); $i++): ?>
         <a href="<?= e(stock_url(['page' => $i])) ?>"
            class="page-btn <?= $i === $page ? 'active' : '' ?>"><?= $i ?></a>
-      <?php
-        endfor;
-
-        if ($end < $totalPages) {
-            if ($end < $totalPages - 1) echo '<span class="page-dots">…</span>';
-            echo '<a href="' . e(stock_url(['page' => $totalPages])) . '" class="page-btn">' . $totalPages . '</a>';
-        }
-      ?>
+      <?php endfor; ?>
 
       <?php if ($page < $totalPages): ?>
         <a href="<?= e(stock_url(['page' => $page + 1])) ?>" class="page-btn">Next ›</a>
       <?php else: ?>
         <span class="page-btn disabled">Next ›</span>
       <?php endif; ?>
-
     </nav>
   <?php endif; ?>
 
@@ -259,13 +228,22 @@ dash_header(
       </label>
 
       <div class="two-col">
-        <label class="field"><span>Price</span>
+        <label class="field"><span>Current price</span>
           <input type="number" name="price" step="0.01" min="0" required>
         </label>
         <label class="field"><span>Quantity</span>
           <input type="number" name="quantity" min="1" value="1" required>
         </label>
       </div>
+
+      <label class="field"><span>Discount % <em>(0 = no discount)</em></span>
+        <input type="number" name="discount_percent" step="0.01" min="0" max="99" value="0">
+      </label>
+
+      <p class="discount-preview" data-discount-preview hidden>
+        Original: <s data-original-display></s> ·
+        <span data-save-display></span>
+      </p>
 
       <label class="field"><span>Category</span>
         <select name="category_id">
@@ -314,13 +292,23 @@ dash_header(
       </label>
 
       <div class="two-col">
-        <label class="field"><span>Price</span>
+        <label class="field"><span>Current price</span>
           <input type="number" name="price" id="edit-price" step="0.01" min="0" required>
         </label>
         <label class="field"><span>Quantity</span>
           <input type="number" name="quantity" id="edit-quantity" min="0" required>
         </label>
       </div>
+
+      <label class="field"><span>Discount % <em>(0 = no discount)</em></span>
+        <input type="number" name="discount_percent" id="edit-discount"
+               step="0.01" min="0" max="99" value="0">
+      </label>
+
+      <p class="discount-preview" id="edit-discount-preview" hidden>
+        Original: <s data-original-display></s> ·
+        <span data-save-display></span>
+      </p>
 
       <label class="field"><span>Category</span>
         <select name="category_id" id="edit-category">
@@ -432,9 +420,8 @@ dash_header(
 
 
 <script>
-/* Stock page wiring — CRUD + pagination-aware modals */
 (() => {
-  // ── Modal open/close ──
+  /* ── Modal open/close ── */
   document.querySelectorAll('[data-open-modal]').forEach(btn => {
     btn.addEventListener('click', () => {
       const m = document.getElementById(btn.dataset.openModal);
@@ -449,7 +436,39 @@ dash_header(
       document.querySelectorAll('.modal:not([hidden])').forEach(m => m.hidden = true);
   });
 
-  // ── Add item ──
+  /* ── Discount preview helpers ── */
+  function wireDiscountPreview(formEl, previewEl) {
+    if (!formEl || !previewEl) return;
+    const priceEl    = formEl.querySelector('[name="price"]');
+    const discountEl = formEl.querySelector('[name="discount_percent"]');
+    if (!priceEl || !discountEl) return;
+
+    const origEl = previewEl.querySelector('[data-original-display]');
+    const saveEl = previewEl.querySelector('[data-save-display]');
+
+    function recalc() {
+      const current = parseFloat(priceEl.value) || 0;
+      const pct     = parseFloat(discountEl.value) || 0;
+      if (current <= 0 || pct <= 0) { previewEl.hidden = true; return; }
+      const original = current / (1 - pct / 100);
+      origEl.textContent = '$' + original.toFixed(2);
+      saveEl.textContent = `save $${(original - current).toFixed(2)}`;
+      previewEl.hidden = false;
+    }
+    priceEl.addEventListener('input', recalc);
+    discountEl.addEventListener('input', recalc);
+  }
+
+  wireDiscountPreview(
+    document.getElementById('addItemForm'),
+    document.querySelector('#addItemForm [data-discount-preview]')
+  );
+  wireDiscountPreview(
+    document.getElementById('editItemForm'),
+    document.getElementById('edit-discount-preview')
+  );
+
+  /* ── Add item ── */
   document.getElementById('addItemForm')?.addEventListener('submit', async e => {
     e.preventDefault();
     const r = await fetch('stock_api.php', { method:'POST', body: new FormData(e.target) });
@@ -458,19 +477,22 @@ dash_header(
     else alert(j.error || 'Failed');
   });
 
-  // ── Edit item ──
+  /* ── Edit item ── */
   document.querySelectorAll('[data-edit-item]').forEach(btn => {
     btn.addEventListener('click', () => {
       const d = JSON.parse(btn.dataset.item);
-      document.getElementById('edit-id').value         = d.id;
-      document.getElementById('edit-title').value      = d.title;
-      document.getElementById('edit-price').value      = d.price;
-      document.getElementById('edit-quantity').value   = d.quantity;
-      document.getElementById('edit-category').value   = d.category_id || '';
+      document.getElementById('edit-id').value          = d.id;
+      document.getElementById('edit-title').value       = d.title;
+      document.getElementById('edit-price').value       = d.price;
+      document.getElementById('edit-discount').value    = d.discount_percent || 0;
+      document.getElementById('edit-quantity').value    = d.quantity;
+      document.getElementById('edit-category').value    = d.category_id || '';
       document.getElementById('edit-description').value = d.description || '';
-      document.getElementById('edit-location').value   = d.location || '';
-      document.getElementById('edit-status').value     = d.status;
-      document.getElementById('editItemModal').hidden  = false;
+      document.getElementById('edit-location').value    = d.location || '';
+      document.getElementById('edit-status').value      = d.status;
+      document.getElementById('editItemModal').hidden   = false;
+      // Fire the preview update
+      document.getElementById('edit-discount').dispatchEvent(new Event('input'));
     });
   });
   document.getElementById('editItemForm')?.addEventListener('submit', async e => {
@@ -481,7 +503,7 @@ dash_header(
     else alert(j.error || 'Failed');
   });
 
-  // ── Restock ──
+  /* ── Restock ── */
   document.querySelectorAll('[data-restock-item]').forEach(btn => {
     btn.addEventListener('click', () => {
       document.getElementById('restock-id').value = btn.dataset.restockItem;
@@ -498,7 +520,7 @@ dash_header(
     else alert(j.error || 'Failed');
   });
 
-  // ── Delete ──
+  /* ── Delete ── */
   document.querySelectorAll('[data-delete-item]').forEach(btn => {
     btn.addEventListener('click', async () => {
       if (!confirm(`Delete "${btn.dataset.itemTitle}"? This cannot be undone.`)) return;
@@ -513,7 +535,7 @@ dash_header(
     });
   });
 
-  // ── Quick sell ──
+  /* ── Quick sell ── */
   document.querySelectorAll('[data-quick-sell]').forEach(btn => {
     btn.addEventListener('click', () => {
       document.getElementById('qs-id').value          = btn.dataset.quickSell;
@@ -535,7 +557,7 @@ dash_header(
     else alert(j.error || 'Failed');
   });
 
-  // ── Live search ──
+  /* ── Live search ── */
   const searchEl = document.getElementById('stockSearch');
   const tableEl  = document.getElementById('stockTable');
   const countEl  = document.getElementById('stockCount');

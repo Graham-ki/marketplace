@@ -1,17 +1,21 @@
 <?php
 require __DIR__ . '/db.php';
 
-
 // Logged-in sellers should manage stock from the dashboard
 if (current_user() && current_user()['role'] === 'seller') {
     header('Location: dashboard.php?tab=stock');
     exit;
 }
+// Admins go to their own panel
+if (current_user() && current_user()['role'] === 'admin') {
+    header('Location: admin/index.php');
+    exit;
+}
+
 $cats = db()->query("SELECT id,name,icon FROM categories ORDER BY name")->fetchAll();
 
 $__pageTitle = 'Build your catalog';
 require __DIR__ . '/layout/header.php';
-
 ?>
 
 <div class="container">
@@ -31,7 +35,9 @@ require __DIR__ . '/layout/header.php';
       <small>Preview them side by side — then publish.</small>
     </div>
     <button class="btn btn-accent btn-lg" id="publishBtn" disabled>
-      Preview & publish →
+      <span class="hide-sm">Preview &amp; publish</span>
+      <span class="show-sm">Publish</span>
+      <span aria-hidden="true">→</span>
     </button>
   </div>
 </div>
@@ -41,7 +47,7 @@ require __DIR__ . '/layout/header.php';
   <div class="catalog-item" data-id="">
     <div class="catalog-item-head">
       <span class="catalog-item-num">#<span data-num>1</span></span>
-      <button type="button" class="btn-link" data-remove>Remove</button>
+      <button type="button" class="btn-link danger" data-remove>Remove</button>
     </div>
 
     <label class="field"><span>Title</span>
@@ -58,13 +64,23 @@ require __DIR__ . '/layout/header.php';
     </div>
 
     <div class="two-col">
-      <label class="field"><span>Price</span>
+      <label class="field"><span>Current price</span>
         <input type="number" min="0" step="0.01" data-field="price" placeholder="0.00">
       </label>
-      <label class="field"><span>Qty</span>
+      <label class="field"><span>Quantity</span>
         <input type="number" min="1" value="1" data-field="quantity">
       </label>
     </div>
+
+    <label class="field"><span>Discount % <em>(0 = no discount)</em></span>
+      <input type="number" min="0" max="99" step="0.01" value="0"
+             data-field="discount_percent" placeholder="0">
+    </label>
+
+    <p class="discount-preview" data-discount-preview hidden>
+      Original: <s data-original-display></s> ·
+      <span data-save-display></span>
+    </p>
 
     <label class="field"><span>Category</span>
       <select data-field="category_id">

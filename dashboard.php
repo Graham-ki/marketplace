@@ -4,7 +4,10 @@ require_login();
 
 $u = current_user();
 $role = $u['role'];
-
+if ($role === 'admin') {
+    header('Location: admin/index.php');
+    exit;
+}
 // Seller display name
 $sellerProfile = null;
 if ($role === 'seller') {

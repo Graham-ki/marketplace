@@ -8,13 +8,10 @@ if (!in_array($filter, ['', 'pending','confirmed','shipped','delivered','cancell
     $filter = '';
 }
 
-// ═══════════════════════════════════════════════════
-// PAGINATION SETUP
-// ═══════════════════════════════════════════════════
 $page    = max(1, (int)($_GET['page'] ?? 1));
 $perPage = 10;
 
-// ─── KPIs (whole set, not filtered by status) ───
+/* ─── KPIs ─── */
 $kpiStmt = db()->prepare("
     SELECT
         COUNT(*)                                                                   AS total_orders,
@@ -38,11 +35,10 @@ $deliveredCount = (int)$kpi['delivered_count'];
 $cancelledCount = (int)$kpi['cancelled_count'];
 $revenue        = (float)$kpi['revenue'];
 
-// ─── Count for current filter (for pagination math) ───
-$countSql = "SELECT COUNT(*) FROM orders WHERE seller_id = ?";
+/* ─── Count for current filter ─── */
+$countSql  = "SELECT COUNT(*) FROM orders WHERE seller_id = ?";
 $countArgs = [$u['id']];
 if ($filter) { $countSql .= " AND status = ?"; $countArgs[] = $filter; }
-
 $countStmt = db()->prepare($countSql);
 $countStmt->execute($countArgs);
 $filteredTotal = (int)$countStmt->fetchColumn();
@@ -51,13 +47,15 @@ $totalPages = max(1, (int)ceil($filteredTotal / $perPage));
 if ($page > $totalPages) $page = $totalPages;
 $offset = ($page - 1) * $perPage;
 
-// ─── Fetch current page ───
+/* ─── Fetch page ─── */
 $sql = "
     SELECT o.*, p.title AS product_title, p.cover_image,
-           b.full_name AS buyer_name, b.email AS buyer_email
+           b.full_name AS buyer_name, b.email AS buyer_email,
+           pay.status AS payment_status
     FROM orders o
     JOIN products p ON p.id = o.product_id
     JOIN users b   ON b.id = o.buyer_id
+    LEFT JOIN payments pay ON pay.order_id = o.id
     WHERE o.seller_id = ?";
 $args = [$u['id']];
 if ($filter) { $sql .= " AND o.status = ?"; $args[] = $filter; }
@@ -67,7 +65,6 @@ $stmt = db()->prepare($sql);
 $stmt->execute($args);
 $orders = $stmt->fetchAll();
 
-// ─── URL helper: preserve current filter across pages ───
 function orders_url(array $overrides = []): string {
     $base = [
         'tab'    => 'orders',
@@ -78,47 +75,49 @@ function orders_url(array $overrides = []): string {
     return 'dashboard.php?' . http_build_query($params);
 }
 
+$actions = '
+  <div class="btn-group">
+    <button type="button" class="btn btn-ghost" id="downloadSelected" disabled>
+      ⬇ Download Statements
+    </button>
+  </div>
+';
+
 dash_header(
     'Orders',
     $totalOrders . ' order' . ($totalOrders === 1 ? '' : 's') . ' · '
         . money($revenue) . ' lifetime revenue',
-    ''
+    $actions
 );
 ?>
 
-<!-- ═══════════════════════════════════════════════════
-     KPI CARDS
-     ═══════════════════════════════════════════════════ -->
 <div class="kpi-grid">
   <div class="kpi-card gradient decorated">
-    <span class="kpi-label">Total orders</span>
-    <span class="kpi-value"><?= $totalOrders ?></span>
-    <span class="kpi-delta"><?= money($revenue) ?> revenue</span>
+    <div class="kpi-icon">💰</div>
+    <span class="kpi-label">Lifetime revenue</span>
+    <span class="kpi-value"><?= money($revenue) ?></span>
+    <span class="kpi-delta"><?= $totalOrders ?> orders</span>
   </div>
-
-  <div class="kpi-card warn">
+  <div class="kpi-card <?= $pendingCount > 0 ? 'warn' : 'neutral' ?>">
+    <div class="kpi-icon">⏳</div>
     <span class="kpi-label">Pending</span>
-    <span class="kpi-value <?= $pendingCount > 0 ? 'warn' : '' ?>"><?= $pendingCount ?></span>
+    <span class="kpi-value"><?= $pendingCount ?></span>
     <span class="kpi-delta"><?= $pendingCount > 0 ? 'Awaiting confirmation' : 'All clear' ?></span>
   </div>
-
-  <div class="kpi-card info decorated">
+  <div class="kpi-card info">
+    <div class="kpi-icon">📦</div>
     <span class="kpi-label">In progress</span>
     <span class="kpi-value"><?= $confirmedCount + $shippedCount ?></span>
-    <span class="kpi-delta">
-      <?= $confirmedCount ?> confirmed · <?= $shippedCount ?> shipped
-    </span>
+    <span class="kpi-delta"><?= $confirmedCount ?> confirmed · <?= $shippedCount ?> shipped</span>
   </div>
-
-  <div class="kpi-card accent">
+  <div class="kpi-card success">
+    <div class="kpi-icon">✅</div>
     <span class="kpi-label">Delivered</span>
     <span class="kpi-value"><?= $deliveredCount ?></span>
     <span class="kpi-delta"><?= $cancelledCount ?> cancelled</span>
   </div>
 </div>
 
-
-<!-- ═══════════ STATUS FILTER CHIPS ═══════════ -->
 <div class="filter-row">
   <?php foreach ([''=>'All','pending'=>'Pending','confirmed'=>'Confirmed','shipped'=>'Shipped','delivered'=>'Delivered','cancelled'=>'Cancelled'] as $k=>$lbl): ?>
     <a href="<?= e(orders_url(['status' => $k, 'page' => ''])) ?>"
@@ -126,21 +125,15 @@ dash_header(
   <?php endforeach; ?>
 </div>
 
-
 <?php if (!$orders): ?>
-
-  <div class="empty-state small">
-    <p>No orders in this view.</p>
-  </div>
-
+  <div class="empty-state small"><p>No orders in this view.</p></div>
 <?php else: ?>
 
-  <!-- ═══ SEARCH + COUNT ═══ -->
   <div class="list-toolbar">
     <div class="search-mini">
       <span class="search-mini-icon">🔍</span>
       <input type="search" id="orderSearch"
-             placeholder="Search within this page…"
+             placeholder="Search by order code, buyer, or item…"
              autocomplete="off">
     </div>
     <span class="list-count" id="orderCount">
@@ -148,11 +141,13 @@ dash_header(
     </span>
   </div>
 
-  <!-- ═══ TABLE ═══ -->
   <div class="table-scroll">
     <table class="data-table data-table-wide" id="ordersTable">
       <thead>
         <tr>
+          <th style="width:36px">
+            <input type="checkbox" id="selectAll" aria-label="Select all">
+          </th>
           <th>Order</th>
           <th>Item</th>
           <th>Buyer</th>
@@ -166,8 +161,16 @@ dash_header(
         </tr>
       </thead>
       <tbody>
-      <?php foreach ($orders as $o): ?>
+      <?php foreach ($orders as $o):
+        $isPaid = ($o['payment_status'] === 'completed');
+      ?>
         <tr data-order-row="<?= (int)$o['id'] ?>">
+          <td>
+            <input type="checkbox"
+                   class="row-select"
+                   data-order-id="<?= (int)$o['id'] ?>"
+                   aria-label="Select order <?= e($o['order_code']) ?>">
+          </td>
           <td><code><?= e($o['order_code']) ?></code></td>
           <td>
             <div class="cell-product">
@@ -196,6 +199,12 @@ dash_header(
           <td><?= status_pill($o['status']) ?></td>
           <td><small><?= e(date('M j, Y', strtotime($o['created_at']))) ?></small></td>
           <td class="row-actions">
+            <a href="receipt.php?id=<?= (int)$o['id'] ?>" target="_blank"
+               class="btn-link"
+               title="<?= $isPaid ? 'Download receipt' : 'Download invoice' ?>">
+              📄 <?= $isPaid ? 'Receipt' : 'Invoice' ?>
+            </a>
+
             <form method="post" action="order_status.php" style="display:inline">
               <?= csrf_field() ?>
               <input type="hidden" name="order_id" value="<?= (int)$o['id'] ?>">
@@ -205,6 +214,7 @@ dash_header(
                 <?php endforeach; ?>
               </select>
             </form>
+
             <button class="btn-link danger"
                     data-delete-order="<?= (int)$o['id'] ?>"
                     data-delete-code="<?= e($o['order_code']) ?>"
@@ -220,72 +230,47 @@ dash_header(
     <p>No orders match your search on this page.</p>
   </div>
 
-  <!-- ═══ PAGINATION ═══ -->
   <?php if ($totalPages > 1): ?>
     <nav class="pagination" aria-label="Pagination">
-
       <?php if ($page > 1): ?>
         <a href="<?= e(orders_url(['page' => $page - 1])) ?>" class="page-btn">‹ Prev</a>
       <?php else: ?>
         <span class="page-btn disabled">‹ Prev</span>
       <?php endif; ?>
 
-      <?php
-        $window = 2;
-        $start  = max(1, $page - $window);
-        $end    = min($totalPages, $page + $window);
-
-        if ($start > 1) {
-            echo '<a href="' . e(orders_url(['page' => 1])) . '" class="page-btn">1</a>';
-            if ($start > 2) echo '<span class="page-dots">…</span>';
-        }
-
-        for ($i = $start; $i <= $end; $i++):
-      ?>
+      <?php for ($i = max(1, $page - 2); $i <= min($totalPages, $page + 2); $i++): ?>
         <a href="<?= e(orders_url(['page' => $i])) ?>"
            class="page-btn <?= $i === $page ? 'active' : '' ?>"><?= $i ?></a>
-      <?php
-        endfor;
-
-        if ($end < $totalPages) {
-            if ($end < $totalPages - 1) echo '<span class="page-dots">…</span>';
-            echo '<a href="' . e(orders_url(['page' => $totalPages])) . '" class="page-btn">' . $totalPages . '</a>';
-        }
-      ?>
+      <?php endfor; ?>
 
       <?php if ($page < $totalPages): ?>
         <a href="<?= e(orders_url(['page' => $page + 1])) ?>" class="page-btn">Next ›</a>
       <?php else: ?>
         <span class="page-btn disabled">Next ›</span>
       <?php endif; ?>
-
     </nav>
   <?php endif; ?>
 
 <?php endif; ?>
 
 
-<!-- ═══════════ DELETE ORDER MODAL ═══════════ -->
+<!-- ═══ DELETE ORDER MODAL ═══ -->
 <div class="modal" id="deleteOrderModal" hidden>
   <div class="modal-backdrop" data-close-modal></div>
   <div class="modal-panel modal-panel-sm">
     <button class="modal-close" data-close-modal>×</button>
-
     <div class="confirm-hero">
       <div class="confirm-icon">🗑️</div>
       <h2>Delete order?</h2>
       <p class="step-sub" id="delete-order-sub">This cannot be undone.</p>
-
       <div class="confirm-warning" id="delete-order-warning" hidden>
         ⚠️ This order is <strong>not cancelled</strong>. Deleting it removes the
         record and any linked payment. Consider marking it
         <strong>cancelled</strong> instead to preserve history.
       </div>
-
       <form id="deleteOrderForm" class="settings-form" style="margin-top:20px">
         <?= csrf_field() ?>
         <input type="hidden" name="order_id" id="delete-order-id">
-
         <div class="modal-actions">
           <button type="button" class="btn btn-ghost" data-close-modal>Cancel</button>
           <button type="submit" class="btn btn-danger">Delete order</button>
@@ -298,29 +283,25 @@ dash_header(
 
 <script>
 (() => {
-  /* ═══════════════════════════════════════════════
-     LIVE SEARCH (within the loaded page)
-     ═══════════════════════════════════════════════ */
+  /* ═══ Live search ═══ */
   const searchEl = document.getElementById('orderSearch');
   const tableEl  = document.getElementById('ordersTable');
   const countEl  = document.getElementById('orderCount');
   const noResEl  = document.getElementById('noResults');
 
   if (searchEl && tableEl) {
-    const rows        = [...tableEl.querySelectorAll('tbody tr')];
-    const onPageTotal = rows.length;
+    const rows          = [...tableEl.querySelectorAll('tbody tr')];
+    const onPageTotal   = rows.length;
     const filteredTotal = <?= (int)$filteredTotal ?>;
 
     searchEl.addEventListener('input', () => {
       const q = searchEl.value.trim().toLowerCase();
       let shown = 0;
-
       rows.forEach(r => {
         const hit = !q || r.textContent.toLowerCase().includes(q);
         r.hidden = !hit;
         if (hit) shown++;
       });
-
       if (countEl) {
         countEl.textContent = q
           ? `${shown} of ${onPageTotal} on this page (${filteredTotal} total)`
@@ -330,21 +311,22 @@ dash_header(
     });
   }
 
-  /* ═══════════════════════════════════════════════
-     DELETE ORDER
-     ═══════════════════════════════════════════════ */
+  /* ═══ Modal helpers ═══ */
+  document.querySelectorAll('[data-close-modal]').forEach(el => {
+    el.addEventListener('click', () => el.closest('.modal').hidden = true);
+  });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape')
+      document.querySelectorAll('.modal:not([hidden])').forEach(m => m.hidden = true);
+  });
+
+  /* ═══ Delete order ═══ */
   document.querySelectorAll('[data-delete-order]').forEach(btn => {
     btn.addEventListener('click', () => {
-      const id     = btn.dataset.deleteOrder;
-      const code   = btn.dataset.deleteCode;
-      const status = btn.dataset.deleteStatus;
-
-      document.getElementById('delete-order-id').value  = id;
+      document.getElementById('delete-order-id').value = btn.dataset.deleteOrder;
       document.getElementById('delete-order-sub').textContent =
-        `Order ${code} will be permanently removed along with its payment records.`;
-
-      // Warn harder if it's not cancelled
-      document.getElementById('delete-order-warning').hidden = status === 'cancelled';
+        `Order ${btn.dataset.deleteCode} will be permanently removed along with its payment records.`;
+      document.getElementById('delete-order-warning').hidden = btn.dataset.deleteStatus === 'cancelled';
       document.getElementById('deleteOrderModal').hidden = false;
     });
   });
@@ -353,9 +335,7 @@ dash_header(
     e.preventDefault();
     const btn  = e.target.querySelector('button[type=submit]');
     const orig = btn.textContent;
-    btn.disabled = true;
-    btn.textContent = 'Deleting…';
-
+    btn.disabled = true; btn.textContent = 'Deleting…';
     try {
       const fd = new FormData(e.target);
       fd.append('action', 'delete');
@@ -364,27 +344,49 @@ dash_header(
       if (j.ok) {
         document.querySelector(`tr[data-order-row="${document.getElementById('delete-order-id').value}"]`)?.remove();
         document.getElementById('deleteOrderModal').hidden = true;
-
-        // If the table is now empty, reload so KPI cards update
         if (!document.querySelector('#ordersTable tbody tr:not([hidden])')) {
           location.reload();
         }
       } else {
-        alert(j.error || 'Failed to delete order');
-        btn.disabled = false; btn.textContent = orig;
+        alert(j.error || 'Failed'); btn.disabled = false; btn.textContent = orig;
       }
-    } catch (_) {
+    } catch {
       alert('Network error');
       btn.disabled = false; btn.textContent = orig;
     }
   });
 
-  document.querySelectorAll('[data-close-modal]').forEach(el =>
-    el.addEventListener('click', () => el.closest('.modal').hidden = true));
+  /* ═══ Bulk download ═══ */
+  const selectAll   = document.getElementById('selectAll');
+  const downloadBtn = document.getElementById('downloadSelected');
+  const checkboxes  = [...document.querySelectorAll('.row-select')];
 
-  document.addEventListener('keydown', e => {
-    if (e.key === 'Escape')
-      document.querySelectorAll('.modal:not([hidden])').forEach(m => m.hidden = true);
+  function updateDownloadButton() {
+    const checked = checkboxes.filter(r => r.checked);
+    downloadBtn.disabled = checked.length === 0;
+    downloadBtn.textContent = checked.length === 0
+      ? '⬇ Download Statements'
+      : `⬇ Download ${checked.length} document${checked.length === 1 ? '' : 's'}`;
+  }
+
+  selectAll?.addEventListener('change', () => {
+    checkboxes.forEach(r => r.checked = selectAll.checked);
+    updateDownloadButton();
+  });
+  checkboxes.forEach(r => r.addEventListener('change', updateDownloadButton));
+  updateDownloadButton();
+
+  downloadBtn?.addEventListener('click', () => {
+    const checked = checkboxes.filter(r => r.checked);
+    if (!checked.length) return;
+
+    const ids = checked.map(r => r.dataset.orderId).join(',');
+
+    if (checked.length === 1) {
+      window.open(`receipt.php?id=${ids}`, '_blank');
+    } else {
+      window.open(`receipt_bulk.php?ids=${ids}`, '_blank');
+    }
   });
 })();
 </script>

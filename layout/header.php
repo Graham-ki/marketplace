@@ -28,33 +28,81 @@ function cart_count(): int {
 <header class="topbar">
   <div class="container topbar-inner">
 
-    <a href="index.php" class="brand">
+    <!-- Brand -->
+    <a href="index.php" class="brand" aria-label="Market home">
       <span class="brand-mark">◆</span>
-      <span>Market</span>
+      <span class="brand-text">Market</span>
     </a>
 
-   <form class="searchbar" action="index.php" method="get" role="search">
-  <span class="searchbar-icon">🔍</span>
-  <input type="search" name="q"
-         placeholder="Search items or shops…"
-         value="<?= e($__q) ?>" autocomplete="off">
-  <div id="searchResults" class="search-dropdown" hidden></div>
-</form>
+    <!-- Desktop / tablet search -->
+    <form class="searchbar" action="index.php" method="get" role="search">
+      <span class="searchbar-icon" aria-hidden="true">🔍</span>
+      <input type="search" name="q"
+             placeholder="Search items or shops…"
+             value="<?= e($__q) ?>" autocomplete="off"
+             aria-label="Search items or shops">
+      <div id="searchResults" class="search-dropdown" hidden></div>
+    </form>
 
+    <!-- Mobile search toggle -->
+    <button type="button" class="mobile-search-toggle"
+            aria-label="Open search" data-open-mobile-search>
+      🔍
+    </button>
+
+    <!-- Nav -->
     <nav class="topbar-nav">
-      <a href="cart.php" class="cart-btn" aria-label="Cart">
-        🛒 <span class="cart-count"><?= $__cartCount ?></span>
+
+      <a href="cart.php" class="nav-link cart-btn" aria-label="Cart">
+        <span class="nav-icon" aria-hidden="true">🛒</span>
+        <span class="nav-label">Cart</span>
+        <span class="cart-count"><?= (int)$__cartCount ?></span>
       </a>
 
       <?php if (!$__user): ?>
-          <a href="login.php">Log in</a>
-          <a href="sell.php" class="btn btn-accent btn-sm">Start selling</a>
+
+        <a href="login.php" class="nav-link" aria-label="Log in">
+          <span class="nav-icon" aria-hidden="true">🔑</span>
+          <span class="nav-label">Log in</span>
+        </a>
+
+        <a href="sell.php" class="nav-link nav-link-accent" aria-label="Start selling">
+          <span class="nav-icon" aria-hidden="true">🏷️</span>
+          <span class="nav-label">Start selling</span>
+        </a>
+
       <?php else: ?>
-          <a href="dashboard.php">Dashboard</a>
-          <span class="who">Hi, <?= e($__user['name']) ?></span>
-          <a href="logout.php" class="btn btn-ghost btn-sm">Log out</a>
+
+        <?php if (($__user['role'] ?? '') === 'admin'): ?>
+          <a href="admin/index.php" class="nav-link nav-link-admin" aria-label="Admin panel">
+            <span class="nav-icon" aria-hidden="true">🛡️</span>
+            <span class="nav-label">Admin</span>
+          </a>
+        <?php endif; ?>
+
+        <a href="dashboard.php" class="nav-link" aria-label="Dashboard">
+          <span class="nav-icon" aria-hidden="true">📊</span>
+          <span class="nav-label">Dashboard</span>
+        </a>
+
+        <a href="logout.php" class="nav-link nav-link-ghost nav-link-danger" aria-label="Log out">
+          <span class="nav-icon" aria-hidden="true">⛔</span>
+          <span class="nav-label">Log out</span>
+        </a>
+
       <?php endif; ?>
     </nav>
+  </div>
+
+  <!-- Mobile search overlay -->
+  <div class="mobile-search" hidden id="mobileSearch">
+    <form action="index.php" method="get" role="search" class="mobile-search-form">
+      <span class="searchbar-icon" aria-hidden="true">🔍</span>
+      <input type="search" name="q" placeholder="Search items or shops…"
+             value="<?= e($__q) ?>" autocomplete="off" autofocus>
+      <button type="button" class="mobile-search-close"
+              aria-label="Close search" data-close-mobile-search>×</button>
+    </form>
   </div>
 </header>
 
